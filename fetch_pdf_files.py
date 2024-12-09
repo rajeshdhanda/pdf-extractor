@@ -1,19 +1,14 @@
 import os
-import urllib.parse
+import json
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-def download_pdf(url):
-    # Extract "type" parameter from URL
-    parsed_url = urllib.parse.urlparse(url)
-    query_params = urllib.parse.parse_qs(parsed_url.query)
-    folder_name = query_params.get("type", ["default"])[0]
-
-    # Create a download directory for the specific type
-    download_dir = os.path.join(os.getcwd(), "downloads", folder_name)
+def download_pdf(url, resource_name, base_download_dir):
+    # Create a download directory for the specific resource name
+    download_dir = os.path.join(base_download_dir, resource_name)
     os.makedirs(download_dir, exist_ok=True)
 
     options = webdriver.ChromeOptions()
@@ -61,6 +56,20 @@ def download_pdf(url):
     finally:
         driver.quit()
 
+
+def download_all_pdfs_from_json(json_file_path, base_download_dir):
+    # Load the JSON file
+    with open(json_file_path, 'r') as file:
+        resources = json.load(file)
+
+    # Iterate over each resource and download PDFs
+    for resource_name, urls in resources.items():
+        print(f"Starting download for resource: {resource_name}")
+        for url in urls:
+            print(f"Downloading from: {url}")
+            download_pdf(url, resource_name, base_download_dir)
+
 # Example usage
-url = "https://visionias.in/resources/material/?id=1372&type=mains_sol"
-download_pdf(url)
+json_file_path = 'pdf_configs.json'  
+base_download_dir = os.path.join(os.getcwd(), "downloads")
+download_all_pdfs_from_json(json_file_path, base_download_dir)
