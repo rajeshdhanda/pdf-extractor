@@ -2,6 +2,7 @@ import os
 import json
 import time
 import logging
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -18,7 +19,22 @@ logging.basicConfig(
     ]
 )
 
-def download_pdf(url, resource_name, base_download_dir, retries=3, retry_delay=5):
+def wait_for_download(download_dir, timeout=600, check_interval=5):
+    """Wait for a download to complete by monitoring the directory for valid files."""
+    logging.info(f"Monitoring downloads in: {download_dir} with timeout {timeout}s")
+    elapsed_time = 0
+    while elapsed_time < timeout:
+        files = os.listdir(download_dir)
+        # Check for valid PDFs and ensure no temporary files
+        if any(file.endswith(".pdf") for file in files) and not any(
+            file.endswith(".crdownload") or file.startswith("temp_") for file in files
+        ):
+            return True
+        time.sleep(check_interval)
+        elapsed_time += check_interval
+    return False
+
+def download_pdf(url, resource_name, base_download_dir, retries=3, retry_delay=10):
     """Download a PDF from the given URL into a resource-specific folder."""
     download_dir = os.path.join(base_download_dir, resource_name)
     os.makedirs(download_dir, exist_ok=True)
@@ -29,11 +45,15 @@ def download_pdf(url, resource_name, base_download_dir, retries=3, retry_delay=5
     options.add_argument("--disable-dev-shm-usage")
 
     # Configure download settings
+    temp_prefix = f"temp_{int(time.time())}_"
     prefs = {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
         "plugins.always_open_pdf_externally": True,
+        "safebrowsing.enabled": False,
+        "download.filename_sanitization": False,
+        "download.file.name_prefix": temp_prefix,
     }
     options.add_experimental_option("prefs", prefs)
 
@@ -47,7 +67,7 @@ def download_pdf(url, resource_name, base_download_dir, retries=3, retry_delay=5
             driver.get(url)
 
             # Wait for the download button to be clickable
-            download_button = WebDriverWait(driver, 10).until(
+            download_button = WebDriverWait(driver, 20).until(
                 EC.element_to_be_clickable((By.ID, "downlode-pdf"))
             )
 
@@ -55,17 +75,12 @@ def download_pdf(url, resource_name, base_download_dir, retries=3, retry_delay=5
             driver.execute_script("arguments[0].scrollIntoView(true);", download_button)
             driver.execute_script("arguments[0].click();", download_button)
 
-            logging.info(f"PDF download initiated. Monitoring downloads in: {download_dir}")
-
-            # Monitor the download directory for completion
-            for _ in range(60):  # Wait up to 60 seconds for the download to complete
-                files = os.listdir(download_dir)
-                if any(file.endswith(".pdf") for file in files):
-                    logging.info(f"PDF download completed! Saved in: {download_dir}")
-                    return  # Exit the function if download succeeds
-                time.sleep(1)
-
-            logging.warning(f"Download timed out for URL: {url}")
+            # Wait for the download to complete
+            if wait_for_download(download_dir):
+                logging.info(f"PDF download completed! Saved in: {download_dir}")
+                return True  # Exit the function if the download succeeds
+            else:
+                logging.warning(f"Download timed out for URL: {url}")
 
         except Exception as e:
             logging.error(f"Error during download attempt {attempt + 1}/{retries} for URL: {url} - {e}")
@@ -78,6 +93,7 @@ def download_pdf(url, resource_name, base_download_dir, retries=3, retry_delay=5
                 time.sleep(retry_delay)
 
     logging.error(f"Failed to download PDF after {retries} attempts for URL: {url}")
+    return False
 
 
 def download_all_pdfs_from_json(json_file_path, base_download_dir):
@@ -85,14 +101,27 @@ def download_all_pdfs_from_json(json_file_path, base_download_dir):
     with open(json_file_path, 'r') as file:
         resources = json.load(file)
 
+    failed_downloads = []  # Track failed downloads
+
     for resource_name, urls in resources.items():
         logging.info(f"Starting downloads for resource: {resource_name}")
         for url in urls:
+            success = download_pdf(url, resource_name, base_download_dir)
+            if not success:
+                failed_downloads.append((url, resource_name))
+
+    # Retry failed downloads
+    if failed_downloads:
+        logging.info("Retrying failed downloads...")
+        for url, resource_name in failed_downloads:
+            logging.info(f"Retrying URL: {url}")
             download_pdf(url, resource_name, base_download_dir)
+
+    logging.info("All downloads attempted. Check logs for details.")
 
 
 # Example usage
 if __name__ == "__main__":
-    json_file_path = 'resources.json'  
+    json_file_path = 'resources.json'  # Path to your JSON file
     base_download_dir = os.path.join(os.getcwd(), "downloads")
     download_all_pdfs_from_json(json_file_path, base_download_dir)
